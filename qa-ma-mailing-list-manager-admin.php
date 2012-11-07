@@ -1,13 +1,13 @@
 <?php
 
 /*
-	(c) 2011, Michael Khalili
+	(c) 2012, Michael Khalili
 
 	http://www.michaelapproved.com/
 
     File: qa-plugin/ma-mailing-list-manager/qa-ma-mailing-list-manager-admin.php
-    Version: 1.0
-    Date: 2011-10-20
+    Version: 1.5
+    Date: 2012-11-06
 	Description: Adds your members email addresses to your MailChimp.com list.
 
 
@@ -29,8 +29,9 @@
         var $directory;
         var $urltoroot;
 		var $mcNewsletterLists;
+		var $options;
         
-                //this runs before the module is used.
+		//this runs before the module is used.
         function load_module($directory, $urltoroot)
         {
 			//file system path to the plugin directory
@@ -44,22 +45,14 @@
                 //a request for the default value for $option
         function option_default($option)
         {
-            if ($option == 'ma_mlm_mc_api_key') {
+            if ($option == 'ma_mlm_settings') {
                 return '';
-            }elseif ($option == 'ma_mlm_mc_lists') {
-				return '';
-			}elseif ($option == 'ma_mlm_mc_subscribe_new_members') {
-				return false;
-			}elseif ($option == 'ma_mlm_mc_send_confirmation_email') {
-				return false;
-			}elseif ($option == 'ma_mlm_mc_confirmed_only') {
-				return true;
-			}
+            }
 		}
         
         function admin_form()
         {
-            
+           
             //default form as unsaved
             $saved=false;
 
@@ -69,24 +62,64 @@
 			//default to no message being displayed
 			$okDisplay = null;
 			
+			//grab the serialized settings from db and unserialize them (if they exist)
+			$optionsSerialized = qa_opt('ma_mlm_settings');
+
+			if ($optionsSerialized == ''){
+				$this->options = array();
+			}else{
+				$this->options = unserialize($optionsSerialized);
+			}			
+			
+			
             //has the save button been pressed?
             if (qa_clicked('ma_mlm_save_button')) {
+				$table_exists = qa_db_read_one_value(qa_db_query_sub("SHOW TABLES LIKE '^mamlmConfirm'"),true);
+				if(!$table_exists) {
+					qa_db_query_sub(
+						'CREATE TABLE IF NOT EXISTS ^mamlmConfirm (
+						userId bigint(20) unsigned NOT NULL,
+						created datetime NOT NULL,
+						listProvider varchar(10) NOT NULL,
+						listId varchar(100) NOT NULL,
+						listSettings varchar(1000) NOT NULL,
+						UNIQUE (userId, listProvider, listId)
+						) ENGINE=MyISAM  DEFAULT CHARSET=utf8'
+					);
+				}
                 
-                //save the MC api key
-                qa_opt('ma_mlm_mc_api_key', qa_post_text('ma_mlm_mc_api_key'));
-               
-				//save the MC list to use.
-				qa_opt('ma_mlm_mc_lists', qa_post_text('ma_mlm_mc_lists'));
-
-				//save the option to only add members who have confirmed.
-				qa_opt('ma_mlm_mc_confirmed_only', (int)qa_post_text('ma_mlm_mc_confirmed_only'));
-
-				//save the option to send out a confirmation email.
-				qa_opt('ma_mlm_mc_send_confirmation_email', (int)qa_post_text('ma_mlm_mc_send_confirmation_email'));
+				//clear out the old options.
+				$this->options = array();
 				
-				//save the value of whether we should subscribe new members.
-				qa_opt('ma_mlm_mc_subscribe_new_members', (int)qa_post_text('ma_mlm_mc_subscribe_new_members'));
+				$this->options['mc_api_key'] = qa_post_text('ma_mlm_mc_api_key');
+				
+				//grab the ma_mlm_mcNewsletterLists and unserialize it so we can loop through
+				$mcNewsletterListsSerializedEncoded = qa_post_text('ma_mlm_mcNewsletterLists');
+				$mcNewsletterListsSerialized = html_entity_decode($mcNewsletterListsSerializedEncoded, ENT_QUOTES, "UTF-8");
+				$this->mcNewsletterLists = unserialize($mcNewsletterListsSerialized);
+				
+				if (isset($this->mcNewsletterLists['list'])) {
+					//loop through and save each of the settings from the list.
+					foreach($this->mcNewsletterLists['list'] as $listId => $listName ){
 
+						//using the listId, save the other fields for this submit
+						$this->options['list'][$listId]['enabled'] = (int)qa_post_text('ma_mlm_mc_list_enabled_' . $listId);
+						$this->options['list'][$listId]['name'] = $listName;
+						$this->options['list'][$listId]['regcheckbox'] = (int)qa_post_text('ma_mlm_mc_list_regcheckbox_' . $listId);
+						$this->options['list'][$listId]['regtext'] = qa_post_text('ma_mlm_mc_list_regtext_' . $listId);
+						$this->options['list'][$listId]['regprecheck'] = (int)qa_post_text('ma_mlm_mc_list_regprecheck_' . $listId);
+						$this->options['list'][$listId]['afterconf'] = (int)qa_post_text('ma_mlm_mc_list_afterconf_' . $listId);
+						$this->options['list'][$listId]['confsend'] = (int)qa_post_text('ma_mlm_mc_list_confsend_' . $listId);
+
+					}
+				}
+				
+				
+				//serialize the array so we can save it as one value in the db
+				$optionsSerialized = serialize($this->options);
+				
+				qa_opt('ma_mlm_settings', $optionsSerialized);
+				
 				
                 //mark form as saved
                 $saved=true;
@@ -98,33 +131,9 @@
 				$showSettings = true;
             }
 			
-			//Is the user trying to import all existing members?
-			if (qa_clicked('ma_mlm_mc_subscribe_existing_members') && 
-								qa_post_text('ma_mlm_mc_subscribe_existing_members_confirm')) {
-				
-				//Execute the batch process
-				$batchSubscribeResult = $this->mcBatchSubscribe();
-
-				if ($batchSubscribeResult['success']) {
-					$okDisplay = 'Import success! Added: ' . $batchSubscribeResult['stats']['added'] . 
-							'. Updated: ' . $batchSubscribeResult['stats']['updated'] . 
-							'. Errored: ' . $batchSubscribeResult['stats']['errored'] . '.';
-					
-					//display the import report as a textarea
-					$importReportTextarea = array(
-                        'label' => 'Import report',
-                        'type' => 'textarea',
-                        'rows' => '10',
-                        'value' => $batchSubscribeResult['import_report']
-                    );
-							
-				}else{
-					$okDisplay = 'Import failed! ' . $batchSubscribeResult['error_message'];
-				}
-			}
 			
-			//Show the settings if the "Show Settings" or "Subscribe Existing Members" buttons are clicked
-			if (qa_clicked('ma_mlm_show_settings') || qa_clicked('ma_mlm_mc_subscribe_existing_members')) {
+			//Show the settings if the "Show Settings" is clicked
+			if (qa_clicked('ma_mlm_show_settings')) {
 				//show the settings
 				$showSettings = true;
 			}
@@ -133,36 +142,31 @@
 			if ($showSettings) {
 				//run the code that gets the Mail Chimp lists
 				$this->mcNewsletterLists = $this->mcLists();
-
+				
 				//build the form.
+				
+				//Serialize the list array and store it in a hidden field
+				$mcNewsletterListsSerialized = serialize($this->mcNewsletterLists);
+				$form['hidden']['ma_mlm_mcNewsletterLists'] = htmlentities($mcNewsletterListsSerialized, ENT_QUOTES, "UTF-8");
+
 				//'ok' displays a message above the form. Used here to display a success message if the form has been saved.
 				//files contains an array of field options.
-				$form=array(
-					'ok' => $okDisplay,
-
-					//lets ask for the MailChimp API information
-					'fields' => array(
-						'mc_api_key' => array(
+				
+				$form['ok'] = $okDisplay;
+				$form['fields']['mc_api_key'] = array(
 							'label' => 'MailChimp.com API Key',
 							'type' => 'textbox',
-							'value' => qa_opt('ma_mlm_mc_api_key'),
+							'value' => isset($this->options['mc_api_key']) ? $this->options['mc_api_key'] : '',
 							'tags' => 'NAME="ma_mlm_mc_api_key"',
-							'error' => array_key_exists('error_message', $this->mcNewsletterLists) ? $this->mcNewsletterLists['error_message'] : ''
-						),
-					),
+							'error' => isset($this->mcNewsletterLists['error_message']) ? $this->mcNewsletterLists['error_message'] : ''
+						);
 
-					'buttons' => array(
-						array(
+				$form['buttons']['save'] = array(
 							'label' => 'Save Changes',
 							'tags' => 'NAME="ma_mlm_save_button"',
-						),
-					),
-				);
+							'note' => '<div style="text-align: left;">To import existing users, you can export <a href="./ma-mlm-export" target="_blank">all emails</a> or <a href="./ma-mlm-export?confirmed=true" target="_blank">only confirmed emails</a> and import them on the <a href="http://MailChimp.com" target="_blank">Mail Chimp</a> website.</div>',
+						);
 
-				//Was there an import report textarea created? If so, show it.
-				if (is_array($importReportTextarea)) {
-					$form['fields']['mc_import_report'] = $importReportTextarea;
-				}
 
 				//Were we able to pull up the newsletter list?
 				if ($this->mcNewsletterLists['success']) {
@@ -170,72 +174,61 @@
 					$mcListSelectedErrorMsg = '';
 					$mcListSelectedValue = '';
 
-					//make sure there's been a list selected previously
-					if (qa_opt('ma_mlm_mc_lists') != '') {
+					
 
-						//does this list still exist?
-						if (array_key_exists(qa_opt('ma_mlm_mc_lists'), $this->mcNewsletterLists['list'])) {
-							$mcListSelectedValue = $this->mcNewsletterLists['list'][qa_opt('ma_mlm_mc_lists')];
-							$mcListSelectedMsg = "Members will be added to: $mcListSelectedValue";
-						}else{
-							$mcListSelectedErrorMsg = 'Previously saved list does not exist anymore (list id: ' . qa_opt('ma_mlm_mc_lists') . ')';
-						}
+					foreach($this->mcNewsletterLists['list'] as $listId => $listName ){
+						//Add the subscribe new members checkbox.
+
+						$form['fields']['ma_mlm_mc_list_enabled_' . $listId] = array(
+							'label' => '<span style="font-weight: bold;">Enable: ' . $listName . '</span>',
+							'type' => 'checkbox',
+							'value' => isset($this->options['list'][$listId]['enabled']) ? $this->options['list'][$listId]['enabled'] : 0,
+							'error' => '',
+							'tags' => '" NAME="ma_mlm_mc_list_enabled_' . $listId . '"',
+						);
+
+						$form['fields']['ma_mlm_mc_list_regcheckbox_' . $listId] = array(
+							'label' => 'Show checkbox asking user to subscribe while registering. Without a checkbox, all members will be subscribed during registration.',
+							'type' => 'checkbox',
+							'value' => isset($this->options['list'][$listId]['regcheckbox']) ? $this->options['list'][$listId]['regcheckbox'] : 0,
+							'error' => '',
+							'tags' => 'NAME="ma_mlm_mc_list_regcheckbox_' . $listId . '"',
+						);
+						
+						$form['fields']['ma_mlm_mc_list_regtext_' . $listId] = array(
+							'label' => 'Text to show next to checkbox while registering.',
+							'type' => 'text',
+							'value' => isset($this->options['list'][$listId]['regtext']) ? $this->options['list'][$listId]['regtext'] : 'Subscribe to the mailing list.',
+							'error' => '',
+							'tags' => 'NAME="ma_mlm_mc_list_regtext_' . $listId . '"',
+						);
+						
+						$form['fields']['ma_mlm_mc_list_regprecheck_' . $listId] = array(
+							'label' => 'Precheck the registration checkbox.',
+							'type' => 'checkbox',
+							'value' => isset($this->options['list'][$listId]['regprecheck']) ? $this->options['list'][$listId]['regprecheck'] : 0,
+							'error' => '',
+							'tags' => 'NAME="ma_mlm_mc_list_regprecheck_' . $listId . '"',
+						);
+
+
+						$form['fields']['ma_mlm_mc_list_afterconf_' . $listId] = array(
+							'label' => 'Only subscribe after member confirms their email when registering.',
+							'type' => 'checkbox',
+							'value' => isset($this->options['list'][$listId]['afterconf']) ? $this->options['list'][$listId]['afterconf'] : 0,
+							'error' => '',
+							'tags' => 'NAME="ma_mlm_mc_list_afterconf_' . $listId . '"',
+						);
+
+						$form['fields']['ma_mlm_mc_list_confsend_' . $listId] = array(
+							'label' => '<div style="padding-bottom: 30px;">Send a confirmation request when adding someone to this list.</div>',
+							'type' => 'checkbox',
+							'value' => isset($this->options['list'][$listId]['confsend']) ? $this->options['list'][$listId]['confsend'] : 0,
+							'error' => '',
+							'tags' => 'NAME="ma_mlm_mc_list_confsend_' . $listId . '"',
+						);
+						
 					}
-
-					//display a dropdown of the lists
-					$form['fields']['mc_lists'] = array(
-						'label' => 'Lists',
-						'type' => 'select',
-						'value' => $mcListSelectedValue,
-						'options' => $this->mcNewsletterLists['list'],
-						'note' => $mcListSelectedMsg,
-						'error' => $mcListSelectedErrorMsg,
-						'tags' => 'NAME="ma_mlm_mc_lists"',
-					);
-
-					//Add the subscribe new members checkbox.
-					$form['fields']['mc_subscribe_new_members'] = array(
-						'label' => 'Automatically subscribe new members.',
-						'type' => 'checkbox',
-						'value' => qa_opt('ma_mlm_mc_subscribe_new_members'),
-						'error' => ($mcListSelectedValue == '') ? 'You must select a list first' : '',
-						'tags' => 'NAME="ma_mlm_mc_subscribe_new_members"',
-					);
-
-					//Add the option to send a confirmation email when adding someone to the list.
-					$form['fields']['mc_confirmed_only'] = array(
-						'label' => 'Only include members who have confirmed their email.',
-						'type' => 'checkbox',
-						'value' => qa_opt('ma_mlm_mc_confirmed_only'),
-						'tags' => 'NAME="ma_mlm_mc_confirmed_only"',
-					);
-
-					//Add the option to send a confirmation email when adding someone to the list.
-					$form['fields']['mc_send_confirmation_email'] = array(
-						'label' => 'Send out a confirmation email when adding someone.',
-						'type' => 'checkbox',
-						'value' => qa_opt('ma_mlm_mc_send_confirmation_email'),
-						'tags' => 'NAME="ma_mlm_mc_send_confirmation_email"',
-					);
-					
-					
-
-
-					//Add the add all existing members confirmation checkbox
-					$form['fields']['mc_subscribe_existing_members_confirm'] = array(
-						'label' => 'Check this box to confirm you\'d like to add all existing members to your Mail Chimp list.',
-						'type' => 'checkbox',
-						'value' => false,
-						'error' => (qa_clicked('ma_mlm_mc_subscribe_existing_members') && 
-									qa_post_text('ma_mlm_mc_subscribe_existing_members_confirm') == false) ? 'You must check the box above to confirm.' : '',
-						'tags' => 'NAME="ma_mlm_mc_subscribe_existing_members_confirm"',
-					);
-
-					//Add the button to import all existing members
-					$form['buttons']['mc_subscribe_existing_members'] = array(
-						'label' => 'Subscribe all existing members',
-						'tags' => 'NAME="ma_mlm_mc_subscribe_existing_members"',
-					);
 
 
 				}
@@ -267,13 +260,13 @@
 		//Returns a list of Mail Chimp newsletter lists.
 		function mcLists() {
 			//make sure the api key is set first
-			if (qa_opt('ma_mlm_mc_api_key') != '') {
+			if (isset($this->options['mc_api_key']) && $this->options['mc_api_key'] != '') {
 
 				//Add the Mail Chimp API lib
 				require_once $this->directory . '/mcapi/MCAPI.class.php';
 
 				//Create the object with the stored API key
-				$api = new MCAPI(qa_opt('ma_mlm_mc_api_key'));
+				$api = new MCAPI($this->options['mc_api_key']);
 
 				//request the list of mailing lists
 				$retval = $api->lists();
@@ -305,72 +298,7 @@
 
 		}
 		
-		//One time, import all existing members into the MC list
-		function mcBatchSubscribe() {
-			//make sure the api key is set first
-			if (qa_opt('ma_mlm_mc_api_key') != '') {
-				//Add the Mail Chimp API lib
-				require_once $this->directory . '/mcapi/MCAPI.class.php';
-				
-				//Create the object with the stored API key
-				$api = new MCAPI(qa_opt('ma_mlm_mc_api_key'));
-
-				//Build the SQL needed to select all member's email addresses
-
-				if (qa_opt('ma_mlm_mc_confirmed_only')) {
-					$users = qa_db_query_sub('SELECT email FROM ^users WHERE flags&#', QA_USER_FLAGS_EMAIL_CONFIRMED);
-				}else{
-					$users = qa_db_query_sub('SELECT email FROM ^users');
-				}
-
-				//prime the value so it wont error out if nothing was returned.
-				$batch = null;
-				
-				while ( ($email=qa_db_read_one_value($users,true)) !== null ) {
-					$batch[] = array('EMAIL'=>$email);
-				}
-												
-				if (count($batch) == 0) {
-					//Nothing to send MC so kick back an error.
-					$response['success'] = false;
-					$response['error_message'] .= "There are no confirmed members.";
-				}else{
-					$optin = qa_opt('ma_mlm_mc_send_confirmation_email'); //Should we send the email to opt in?
-					$up_exist = true; // yes, update currently subscribed users
-					$replace_int = false; // no, add interest, don't replace
-
-					//send the batch to MC
-					$vals = $api->listBatchSubscribe(qa_opt('ma_mlm_mc_lists'),$batch,$optin, $up_exist, $replace_int);
-
-					//How'd the process go?
-					if ($api->errorCode){
-						//Not good. Put together the error code and kick it back.
-						$response['success'] = false;
-						$response['error_message'] = "Batch Subscribe failed! Code: " . $api->errorCode . ". Msg: " . $api->errorMessage . ".";
-					} else {
-						$response['success'] = true;
-
-						$response['stats']['added'] = array_key_exists('add_count', $vals) ? $vals['add_count'] : 0;
-						$response['stats']['updated'] = array_key_exists('update_count', $vals) ? $vals['update_count'] : 0;
-						$response['stats']['errored'] = array_key_exists('error_count', $vals) ? $vals['error_count'] : 0;
-
-						$report = '';
-						$report .= "Added:   " . $response['stats']['added'] . "\n";
-						$report .= "Updated: " . $response['stats']['updated'] . "\n";
-						$report .= "Errors:  " . $response['stats']['errored'] . "\n";
-
-						foreach($vals['errors'] as $val){
-							$report .= $val['email_address'] . "\tfailed\t" . $val['code'] . "\t" . $val['message'] . "\n";
-						}
-
-						$response['import_report'] = $report;
-					}
-				}
-				
-				return $response;
-			}
-		}
-    
+   
     };
     
 

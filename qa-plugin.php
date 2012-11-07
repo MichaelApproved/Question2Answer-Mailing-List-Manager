@@ -1,16 +1,15 @@
 <?php
 
 /*
-	(c) 2011, Michael Khalili
+	(c) 2012, Michael Khalili
 
 	http://www.michaelapproved.com/
 
 	
 	File: qa-plugin/mailing-list-manager/qa-plugin.php
-	Version: 1.0.0
-	Date: 2011-10-20 00:00:00 GMT
+	Version: 1.5.0
+	Date: 2012-11-06 00:00:00 GMT
 	Description: Adds your members email addresses to your MailChimp.com list.
-
 
 	This program is free software; you can redistribute it and/or
 	modify it under the terms of the GNU General Public License
@@ -29,8 +28,8 @@
 	Plugin Name: Mailing List Manager
 	Plugin URI: http://www.michaelapproved.com/
 	Plugin Description: Adds your members email addresses to your MailChimp.com list.
-	Plugin Version: 1.0
-	Plugin Date: 2011-10-20
+	Plugin Version: 1.5
+	Plugin Date: 2012-11-06
 	Plugin Author: Michael Khalili
 	Plugin Author URI: http://www.michaelapproved.com/
 	Plugin License: GPLv2
@@ -43,6 +42,7 @@
 		exit;
 	}
 
+	define('MA_MLM_BASE_PATH', dirname(__FILE__));
 
 	//register the event module that deletes the cache files if a change happens.
 	//qa_register_plugin_module('event', 'qa-ma-mailing-list-manager-event.php', 'qa_ma_mlm_event', 'Mailing List Manager Event Handler');
@@ -53,7 +53,11 @@
 	//event module that catches new/confirmed member events.
 	qa_register_plugin_module('event', 'qa-ma-mailing-list-manager-event.php', 'qa_ma_mlm_event', 'Mailing List Manager Event Handler');
 
+	//Layer to add checkboxes to registration form
+	qa_register_plugin_layer('qa-ma-mailing-list-manager-layer.php', 'Mailing List Manager Layer');
 	
+	//Layer to add checkboxes to registration form
+	qa_register_plugin_module('page', 'qa-ma-mailing-list-manager-page.php', 'qa_ma_mlm_page', 'Page to export user email for import into 3rd party mailing list program.');
 
 /*
 	Omit PHP closing tag to help avoid accidental output

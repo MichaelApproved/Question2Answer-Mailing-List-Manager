@@ -1,4 +1,4 @@
-Question2Answer Mailing List Manager 1.0
+Question2Answer Mailing List Manager 1.5
 ==============================
 
 Description
@@ -11,7 +11,9 @@ Highlights
 - Uses the [MailChimp.com](http://michaelapproved.com/mailchimp) API to imports existing members into your MailChimp.com list.
 - Automatically subscribe new members.
 - Subscribe new members on creation of account or once they confirm their email.
-- Option to not send out another confirmation request. Useful if you're Q2A install is already doing this.
+- Option to not send out a confirmation request from MailChimp.com. This is useful if your Q2A install is already doing this so you can send out just the Q2A confirmation email and have the member be added to the mailing list when they confirm their Q2A account.
+- Adds checkboxes to the registration form with the option to preselct them.
+- Works with several lists at a time so you can ask members to subscribe to more than one list when registering.
 
 
 Installation
